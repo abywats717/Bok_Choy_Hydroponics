@@ -1,0 +1,516 @@
+---
+title: "Bok Choy Data"
+author: "Auja Bywater"
+last updated: "2025-10-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load packages
+```{r}
+pacman::p_load(summarytools, psych, dplyr, hablar, ggplot2, lme4, lmerTest, dplyr, ggpubr, readxl, car, purrr, tidyr, emmeans)
+```
+
+# Load in the data
+```{r}
+all_season <- read_excel("data_spring.xlsx", 9)
+head(all_season)
+```
+# Subset the seasons
+```{r}
+fall <- all_season[all_season$season == "fall", ]
+spring <- all_season[all_season$season == "spring", ]
+```
+
+# Main questions
+
+1. Do the five different hydroponic systems vary from each other in APC counts?
+
+2.Are there differences in APC counts between seasons and over time?
+
+3. Does pH or temperature explain any differences?
+
+# Exploratory Statistics
+# Calculate the mean log apc for each system in both seasons
+```{r}
+mean_apc_by_system_season <- all_season %>%
+  group_by(season, system) %>%
+  summarise(mean_apc = mean(log_apc, na.rm = TRUE))
+print(mean_apc_by_system_season)
+```
+
+# Calculate the mean log apc for each season
+```{r}
+mean_apc_by_season <- all_season %>%
+  group_by(season) %>%
+  summarise(mean_apc = mean(log_apc, na.rm = TRUE))
+mean_apc_by_season
+```
+
+## Visualize the data
+# Average APC for systems by season
+```{r}
+ggplot(all_season, aes(x = system, y = log_apc, color = season, group = season)) +
+  stat_summary(fun = mean, geom = "point", size = 4) +
+  stat_summary(fun = mean, geom = "line", size = 1) +
+  labs(title = "Interaction Plot: System vs. Log APC by Season",
+       x = "System", y = "Log APC") +
+  theme_minimal()
+```
+
+# Relabel dw to dwc and nf to nft
+```{r}
+all_season <- all_season %>%
+  dplyr::mutate(system = dplyr::recode(system,
+                                       "dw" = "dwc", "nf" = "nft"))
+```
+
+# Graph systems with violin plot
+```{r}
+fig1 <- ggplot(all_season, aes(x = system, y = log_apc, fill = season)) +
+  geom_violin(alpha = 0.5, trim = FALSE, position = position_dodge(0.8)) +  
+  geom_point(aes(color = season), 
+             position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8), 
+             alpha = 0.9, size = 2, shape = 21, stroke = 0, fill = "black") +  
+  labs(
+       x = "Hydroponic System", y = expression(log[10]*" CFU/mL")) +
+  scale_x_discrete(labels = toupper) +  
+  scale_fill_manual(values = c("fall" = "#755556", "spring" = "#1F7387"), 
+                    labels = c("fall" = "Fall", "spring" = "Spring")) +
+  scale_color_manual(values = c("fall" = "#755556", "spring" = "#1F7387"), 
+                     labels = c("fall" = "Fall", "spring" = "Spring")) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12, face = "bold"),
+    axis.title = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 18, face = "bold"),
+    plot.title = element_text(size = 16, hjust = 1.3, face = "bold")
+  )
+
+fig1
+
+# Export at 600 dpi
+ggsave("fig1.png", plot = fig1, width = 8, height = 5, dpi = 600, bg = "white")
+```
+
+# Linear Modeling
+Set variables as factors and characters
+```{r}
+all_season$system <- as.factor(all_season$system)
+all_season$day <- as.numeric(as.character(all_season$day))
+all_season$season <- as.factor(all_season$season)
+all_season$replicate <- as.factor(all_season$replicate)
+all_season$temp <- as.numeric(all_season$temp)
+all_season$ph <- as.numeric(all_season$ph)
+```
+
+## Overall APC differences within seasons
+**SPRING**
+#Looking at just APC differences by system in spring - 
+# Not including replicate as a random effect because variance is close to 0
+```{r}
+model_spring <- lm(log_apc ~ system, data = spring)
+summary(model_spring)
+```
+#Look at ANOVA table
+```{r}
+anova(model_spring)
+```
+# Post-hoc test
+```{r}
+em_spring <- emmeans(model_spring, specs = "system")
+pairs(em_spring, adjust = "tukey")
+```
+
+**FALL**
+```{r}
+model_fall <- lm(log_apc ~ system, data = fall)
+summary(model_fall)
+```
+
+# Look at ANOVA table
+```{r}
+anova(model_fall)
+```
+
+# Post-hoc test
+```{r}
+em_fall <- emmeans(model_fall, specs = "system")
+pairs(em_fall, adjust = "tukey")
+```
+
+## Differences in APC counts between seasons
+```{r}
+model_season <- lm(log_apc ~ system * season, data = all_season)
+summary(model_season)
+```
+
+# Look at ANOVA table
+# Season and system significantly influences APC counts
+# The effect of season differs depending on the system (Effect of APC is not consistent across systems)
+```{r}
+anova(model_season)
+```
+
+# Post-hoc test
+```{r}
+# Pairwise comparisons
+emm_season <- emmeans(model_season, ~ system * season)
+pairs(emm_season, adjust = "tukey")  # All comparisons
+```
+
+# Visualize the differences
+```{r}
+interaction.plot(
+  x.factor = all_season$season,
+  trace.factor = all_season$system,
+  response = all_season$log_apc,
+  fun = mean,
+  type = "b",
+  col = rainbow(length(unique(all_season$system))),
+  pch = 19,
+  ylab = "Mean log(APC)",
+  xlab = "Season",
+  trace.label = "System",
+  main = "Interaction Between System and Season on APC"
+)
+```
+
+# APC counts by day
+# Looking at the effect of day on APC counts
+```{r}
+model_day <- lm(log_apc ~ system * season * day, data = all_season)
+summary(model_day)
+```
+
+# ANOVA model
+```{r}
+anova(model_day)
+```
+
+# Looking at individual day trends for system APC counts
+# KR Spring
+```{r}
+summary(lm(log_apc ~ day, data = subset(spring, system == "kr")))
+```
+# KR Fall
+```{r}
+summary(lm(log_apc ~ day, data = subset(fall, system == "kr")))
+```
+# NF Spring
+```{r}
+summary(lm(log_apc ~ day, data = subset(spring, system == "nf")))
+```
+# NF Fall
+```{r}
+summary(lm(log_apc ~ day, data = subset(fall, system == "nf")))
+```
+# DI Spring
+```{r}
+summary(lm(log_apc ~ day, data = subset(spring, system == "di")))
+```
+# DI Fall
+```{r}
+summary(lm(log_apc ~ day, data = subset(fall, system == "di")))
+```
+# DW Spring
+```{r}
+summary(lm(log_apc ~ day, data = subset(spring, system == "dw")))
+```
+# DW Fall
+```{r}
+summary(lm(log_apc ~ day, data = subset(fall, system == "dw")))
+```
+# EF Spring
+```{r}
+summary(lm(log_apc ~ day, data = subset(spring, system == "ef")))
+```
+# EF Fall
+```{r}
+summary(lm(log_apc ~ day, data = subset(fall, system == "ef")))
+```
+
+# Get APC Summary
+```{r}
+library(dplyr)
+
+# Define last day for each season
+last_days <- data.frame(
+  season = c("fall", "spring"),
+  last_day = c(36, 35)
+)
+
+# Join last day info and filter to first and last day
+apc_summary <- all_season %>%
+  left_join(last_days, by = "season") %>%
+  filter(day == 0 | day == last_day) %>%
+  group_by(season, system, day) %>%
+  summarise(
+    mean_apc = mean(log_apc, na.rm = TRUE),
+    sd_apc = sd(log_apc, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(season, system, day)
+
+print(apc_summary)
+
+```
+
+# Visualize the data
+```{r}
+summary_data <- all_season %>%
+  group_by(season, system, day) %>%
+  summarise(
+    mean_apc = mean(log_apc, na.rm = TRUE),
+    se_apc = sd(log_apc, na.rm = TRUE) / sqrt(n()),  # standard error
+    .groups = "drop"
+  )
+
+# Custom labels to capitalize 'fall' and 'spring'
+season_labeller <- as_labeller(c("fall" = "Fall", "spring" = "Spring"))
+
+# Capitalize the systems
+summary_data <- summary_data %>%
+  mutate(system = toupper(system))
+
+# Make the graph
+fig2 <- ggplot(summary_data, aes(x = day, y = mean_apc, color = system, shape = system)) +
+  geom_line(aes(group = system), size = 2, alpha = 0.2) +  # wider and more transparent lines
+  geom_point(size = 3, alpha = 0.8, position = position_jitter(width = 0.3)) + # jittered points
+  geom_errorbar(aes(ymin = mean_apc - se_apc, ymax = mean_apc + se_apc), width = 0.3) + # error bars
+  scale_color_viridis_d(option = "D", end = 0.85) +
+  scale_shape_manual(values = c(16, 17, 15, 18, 19)) + # different shapes for systems
+  facet_wrap(~season, ncol = 2, labeller = season_labeller) +  # Capitalized facet labels
+  labs(x = "Day", y = expression(log[10]*" CFU/mL"), color = "Hydroponic System", shape = "Hydroponic System") +
+  theme_minimal(base_size = 14) +
+  theme(
+    strip.text = element_text(size = 16, face = "plain"),  
+    legend.position = "right"
+  )
+
+fig2
+
+# Export at 600 dpi
+ggsave("fig2.png", plot = fig2, width = 8, height = 5, dpi = 600, bg = "white")
+```
+
+## Looking at pH and temperature 
+# Removing DI systems due to 15 missing data points
+```{r}
+all_season_no_di <- subset(all_season, system != "di")
+```
+
+# Get a summary of system temp and ph
+```{r}
+all_season_no_di %>%
+  group_by(system, season) %>%
+  summarise(
+    mean_temp = mean(temp, na.rm = TRUE),
+    sd_temp = sd(temp, na.rm = TRUE),
+    mean_ph = mean(ph, na.rm = TRUE),
+    sd_ph = sd(ph, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+# Average the replicates
+```{r}
+# Adjust the grouping variables as needed
+avg_data_no_di <- all_season_no_di %>%
+  group_by(system, day, season) %>%
+  summarize(
+    log_apc = mean(log_apc, na.rm = TRUE),
+    temp = mean(temp, na.rm = TRUE),
+    ph = mean(ph, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+# Visualize temperature data
+```{r}
+ggplot(avg_data_no_di, aes(x = temp, y = log_apc, color = system, shape = season)) +
+  geom_point(alpha = 0.7, size = 3) +
+  geom_text(aes(label = day), vjust = -1, size = 3) +  # Adds day labels above points
+  labs(title = "Effect of Temperature on APC by System and Season",
+       x = "Temperature (°C)", y = "Log APC") +
+  theme_minimal() +
+  theme(
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12),
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 14)
+  )
+```
+
+# Visualize pH data
+```{r}
+ggplot(avg_data_no_di, aes(x = ph, y = log_apc, color = system, shape = season)) +
+  geom_point(alpha = 0.7, size = 3) +
+  geom_text(aes(label = day), vjust = -1, size = 3) +  # Adds day labels above points
+  labs(title = "Effect of Temperature on APC by System and Season",
+       x = "pH", y = "Log APC") +
+  theme_minimal() +
+  theme(
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12),
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 14)
+  )
+```
+
+# Day 0 had warmer temps and lower counts. It's likely the tanks were filled warmer and since it was the first day, the APC counts were lower. This is confounding the results. To fix this, day 0 will be removed from further analysis. 
+```{r}
+no_day_0 <- all_season_no_di %>%
+  filter(day != 0)
+```
+
+# Testing if pH differed by season - it does
+```{r}
+t.test(ph ~ season, data = no_day_0)
+```
+# Get the standard deviation for pH
+```{r}
+tapply(no_day_0$ph, no_day_0$season, sd)
+```
+# Testing if temperature differed by season - it does
+```{r}
+t.test(temp ~ season, data = no_day_0)
+```
+# Get the standard deviation for season
+```{r}
+tapply(no_day_0$temp, no_day_0$season, sd)
+```
+
+# Looking at how pH and temp influenced APC counts
+```{r}
+model_env <- lm(log_apc ~ system + temp + ph + season + day, data = no_day_0)
+summary(model_env)
+```
+# Testing if there is a significant impact of season on pH
+```{r}
+model_main <- lm(log_apc ~ system + temp + ph + season + day, data = no_day_0)
+model_int  <- lm(log_apc ~ system + temp + ph * season + day, data = no_day_0)
+
+anova(model_main, model_int)
+```
+
+# Checking if season's effect is reduced when pH is added
+# It does, so pH mediates the effect of season
+```{r}
+summary(lm(log_apc ~ season + ph + temp + system + day, data = no_day_0))
+```
+
+```{r}
+summary(lm(log_apc ~ season + temp + system + day, data = no_day_0))
+```
+
+
+# Checking to see if temperature is influenced by system 
+# It is
+```{r}
+anova_temp <- aov(temp ~ system, data = no_day_0)
+summary(anova_temp)
+```
+# Only the NF and EF systems differed in temperature
+```{r}
+TukeyHSD(anova_temp)
+```
+
+# Checking to see if ph is influenced by system
+# It is
+```{r}
+anova_ph <- aov(ph ~ system, data = no_day_0)
+summary(anova_ph)
+```
+# All systems were significantly different except for EF-DW and EF-KR
+```{r}
+TukeyHSD(anova_ph)
+```
+
+# Graph the interaction between APC and pH
+```{r}
+# Generate full palette for 5 systems
+full_palette <- viridis(5, option = "D", end = 0.85)
+
+# Skip the first color to match the other graph
+palette_skip_first <- full_palette[-1]
+
+# Make sure the levels of system in your data match this order:
+systems_order <- levels(no_day_0$system)
+
+# Manually assign the colors by naming:
+names(palette_skip_first) <- systems_order[systems_order %in% names(palette_skip_first)]
+
+# Assign the palette_skip_first in order of your factor levels (excluding the first)
+palette_manual <- setNames(palette_skip_first, systems_order[-1])
+
+# Fix the system column
+no_day_0$system <- as.character(no_day_0$system)  
+
+# Rebuild factor with uppercase labels
+no_day_0$system <- factor(no_day_0$system,
+                          levels = c("di", "dwc", "ef", "kr", "nft"),
+                          labels = toupper(c("di", "dwc", "ef", "kr", "nft")))
+
+# Make a new pallet with updated capitalization 
+names(palette_manual) <- toupper(names(palette_manual))
+
+# Plot:
+fig3 <- ggplot(no_day_0, aes(x = ph, y = log_apc, color = system, shape = system)) +
+  geom_point(alpha = 0.8, size = 2, position = position_jitter(width = 0.02, height = 0)) + 
+  geom_smooth(method = "lm", se = TRUE, size = 1.5, alpha = 0.3, 
+              aes(fill = system), color = NA) +  # colored confidence bands per system
+  geom_smooth(method = "lm", se = FALSE, size = 1, linetype = "solid") +  # regression lines
+  scale_color_manual(values = palette_manual, name = "Hydroponic System") +
+  scale_fill_manual(values = scales::alpha(palette_manual, 0.3), name = "Hydroponic System") +
+  scale_shape_manual(values = c(17, 15, 18, 19, 16), name = "Hydroponic System") +
+  facet_wrap(~season, scales = "fixed", ncol = 2, labeller = season_labeller) +
+  labs(x = "pH", y = expression(log[10]*" CFU/mL")) +
+  theme_minimal(base_size = 14) +
+  theme(
+    strip.text = element_text(size = 16, face = "plain"),
+    legend.position = "right"
+  )
+
+fig3
+
+# Export at 600 dpi
+ggsave("fig3.png", plot = fig3, width = 8, height = 5, dpi = 600, bg = "white")
+```
+
+# Looking at APC counts on the bok choy leaves
+# Load in the data
+```{r}
+all_bc <- read_excel("data_spring.xlsx", 10)
+head(all_bc)
+```
+
+# Look for differences in system
+```{r}
+model_bc <- aov(apc_log ~ system, data = all_bc)
+summary(model_bc)
+```
+# Look for differences in season
+```{r}
+model_bc <- aov(apc_log ~ season, data = all_bc)
+summary(model_bc)
+```
+
+
+
+
+
+
+
+
+
+
+
